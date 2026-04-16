@@ -21,7 +21,6 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_audio_plugin_client/detail/juce_PluginUtilities.h>
 #include <juce_audio_plugin_client/detail/juce_VSTWindowUtilities.h>
-#include <juce_audio_processors/format_types/juce_LegacyAudioParameter.cpp>
 
 JUCE_BEGIN_IGNORE_WARNINGS_GCC_LIKE("-Wunused-parameter", "-Wsign-conversion", "-Wfloat-conversion")
 JUCE_BEGIN_IGNORE_WARNINGS_MSVC(4100 4127 4244)
@@ -361,8 +360,6 @@ class ClapJuceWrapper : public clap::helpers::Plugin<
     clap_juce_extensions::clap_juce_audio_processor_capabilities *processorAsClapExtensions{
         nullptr};
 
-    bool usingLegacyParameterAPI{false};
-
     ClapJuceWrapper(const clap_host *host, juce::AudioProcessor *p)
         : clap::helpers::Plugin<clap::helpers::MisbehaviourHandler::CLAP_MISBEHAVIOUR_HANDLER_LEVEL,
                                 clap::helpers::CheckingLevel::CLAP_CHECKING_LEVEL>(&desc, host),
@@ -414,28 +411,12 @@ class ClapJuceWrapper : public clap::helpers::Plugin<
             };
         }
 
-        const bool forceLegacyParamIDs = false;
-
-        juceParameters.update(*processor, forceLegacyParamIDs);
-
-        if (processor->getParameters().size() == 0)
-        {
-            usingLegacyParameterAPI = true;
-            DBG("Using Legacy Parameter API: getText will ignore value and use plugin value.");
-        }
-
-        for (auto *juceParam :
-#if JUCE_VERSION >= 0x060103
-             juceParameters
-#else
-             juceParameters.params
-#endif
-
-        )
+        for (auto *juceParam : processor->getParameters())
         {
             uint32_t clapID = generateClapIDForJuceParam(juceParam);
+            while (allClapIDs.find(clapID) != allClapIDs.end())
+                ++clapID;
 
-            jassert(allClapIDs.find(clapID) == allClapIDs.end());
             allClapIDs.insert(clapID);
             paramPtrByClapID[clapID] = JUCEParameterVariant{
                 juceParam, dynamic_cast<juce::RangedAudioParameter *>(juceParam),
@@ -493,9 +474,11 @@ class ClapJuceWrapper : public clap::helpers::Plugin<
 
     static uint32_t generateClapIDForJuceParam(juce::AudioProcessorParameter *param)
     {
-        auto juceParamID = juce::LegacyAudioParameter::getParamID(param, false);
-        auto clapID = static_cast<uint32_t>(juceParamID.hashCode());
-        return clapID;
+        auto paramName = param->getName(1024);
+        if (paramName.isEmpty())
+            paramName = "param_" + juce::String(param->getParameterIndex());
+
+        return static_cast<uint32_t>(paramName.hashCode());
     }
 
 #if JUCE_VERSION >= 0x060008
@@ -575,7 +558,10 @@ class ClapJuceWrapper : public clap::helpers::Plugin<
 
     clap_id clapIdFromParameterIndex(int index) const
     {
-        auto pbi = juceParameters.getParamForIndex(index);
+        if (!juce::isPositiveAndBelow(index, processor->getParameters().size()))
+            return CLAP_INVALID_ID;
+
+        auto *pbi = processor->getParameters()[(size_t)index];
         auto pf = clapIDByParamPtr.find(pbi);
         if (pf != clapIDByParamPtr.end())
             return pf->second;
@@ -1154,21 +1140,8 @@ class ClapJuceWrapper : public clap::helpers::Plugin<
     {
         auto pbi = paramPtrByClapID[paramId];
         value = (double)getNormalisedParameterValue(pbi, (float)value);
-
-        if (!usingLegacyParameterAPI)
-        {
-            auto res = pbi.processorParam->getText((float)value, (int)size);
-            strncpy(display, res.toStdString().c_str(), size);
-        }
-        else
-        {
-            /*
-             * This is really unsatisfactory but we have very little choice in the
-             * event that the JUCE parameter mode is more or less like a VST2
-             */
-            auto res = pbi.processorParam->getCurrentValueAsText();
-            strncpy(display, res.toStdString().c_str(), size);
-        }
+        auto res = pbi.processorParam->getText((float)value, (int)size);
+        strncpy(display, res.toStdString().c_str(), size);
 
         return true;
     }
@@ -1756,7 +1729,7 @@ class ClapJuceWrapper : public clap::helpers::Plugin<
             return false;
 
         const juce::MessageManagerLock mmLock;
-        editor.reset(processor->createEditorIfNeeded());
+        editor.reset(processor->createEditorIfNecessary());
 
         if (editor == nullptr)
             return false;
@@ -1771,7 +1744,7 @@ class ClapJuceWrapper : public clap::helpers::Plugin<
         }
         else
         {
-            // if hasEditor() returns true then createEditorIfNeeded has to return a valid editor
+            // if hasEditor() returns true then createEditorIfNecessary has to return a valid editor
             jassertfalse;
         }
 
@@ -1967,8 +1940,6 @@ class ClapJuceWrapper : public clap::helpers::Plugin<
     std::unordered_map<const juce::AudioProcessorParameter *, clap_id> clapIDByParamPtr;
     // Every id we have issued
     std::unordered_set<clap_id> allClapIDs;
-
-    juce::LegacyAudioParametersWrapper juceParameters;
 
     const clap_event_transport *transportInfo{nullptr};
     bool hasTransportInfo{false};

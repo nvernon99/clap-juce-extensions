@@ -11,10 +11,8 @@ It is worth repeating that if JUCE implements CLAP support "natively"
 in the future, it is unlikely that the approach outlined here would be
 compatible with that implementation.
 
-Note that the workflow below pre-supposes that your plugin uses the modern
-JUCE parameter classes. If your plugin is using JUCE's "legacy" parameter
-mechanisms, then the CLAP JUCE wrapper cannot support parameter modulation
-(although regular parameter functionality will still work).
+Note that the workflow below assumes your plugin uses JUCE's current
+parameter classes.
 
 ## Monophonic Modulation
 
